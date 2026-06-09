@@ -38,11 +38,8 @@ function checkDryViolations(content, currentFilePath) {
   
   for (const func of allFunctions) {
     // Fixed regex - removed unmatched closing parenthesis
-    const funcName = func.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || func.match(/(?:const|let|var)\s+(\w+)\s*=)/)?.[1];
+    const funcName = func.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || func.match(/(?:const|let|var)\s+(\w+)\s*=/)?.[1];
     if (!funcName) continue;
-    
-    // Get function body (simplified)
-    const funcBody = func.replace(/.*?\{/, '').replace(/\}$/, '').trim();
     
     // Check for exact duplicates in other files (basic check)
     try {
