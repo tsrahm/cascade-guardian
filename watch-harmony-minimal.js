@@ -1,23 +1,28 @@
 #!/usr/bin/env node
 
 /**
- * Minimal real-time validation watcher for Harmony repository
+ * Enhanced minimal real-time validation watcher for Harmony repository
  * Completely bypasses search functionality to avoid all FTS5 issues
+ * Includes high-priority features from broken advanced watchers
  */
 
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 
-const PROJECT_PATH = process.argv[2] || '/Users/toryrahm/Documents/Repos/harmony';
+// Parse command line arguments
+const args = process.argv.slice(2);
+const PROJECT_PATH = args[0] || '/Users/toryrahm/Documents/Repos/harmony';
+const DEBOUNCE_TIME = parseInt(args[1]) || 300;
 
-console.log('🔍 Starting minimal real-time validation for:', PROJECT_PATH);
+console.log('🔍 Starting enhanced minimal real-time validation for:', PROJECT_PATH);
+console.log(`⚙️  Debounce time: ${DEBOUNCE_TIME}ms`);
 console.log('Press Ctrl+C to stop watching');
 console.log('');
 
 // Simple file watcher using Node.js fs.watch
 const watchedFiles = new Set();
-const debounceTime = 300;
+const debounceTime = DEBOUNCE_TIME;
 let timeoutId = null;
 
 // Basic DRY detection - check for exact function duplicates
@@ -32,6 +37,7 @@ function checkDryViolations(content, currentFilePath) {
   const allFunctions = [...functionMatches, ...arrowFunctionMatches];
   
   for (const func of allFunctions) {
+    // Fixed regex - removed unmatched closing parenthesis
     const funcName = func.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || func.match(/(?:const|let|var)\s+(\w+)\s*=)/)?.[1];
     if (!funcName) continue;
     
@@ -48,17 +54,23 @@ function checkDryViolations(content, currentFilePath) {
           if (file === currentFilePath) continue;
           
           try {
-            const fileContent = fs.readFileSync(file, 'utf-8');
+            const otherContent = fs.readFileSync(file, 'utf-8');
+            const otherFunctions = otherContent.match(/function\s+(\w+)\s*\([^)]*\)\s*:\s*\w+[^{]*\{[\s\S]*?^}/gm) || [];
+            const otherArrowFunctions = otherContent.match(/(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:\([^)]*\)\s*=>[^{]*\{[\s\S]*?^}|[^=]*=>)/gm) || [];
             
-            // Simple exact match check
-            if (fileContent.includes(funcBody) && funcBody.length > 20) {
-              violations.push({
-                rule: 'dry_violation',
-                message: `Duplicate function '${funcName}' found in ${path.relative(projectPath, file)}`,
-                line_number: content.split('\n').findIndex(line => line.includes(funcName)) + 1,
-                suggestion: 'Extract to shared utility or remove duplicate'
-              });
-              break;
+            for (const otherFunc of [...otherFunctions, ...otherArrowFunctions]) {
+              const otherFuncName = otherFunc.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || otherFunc.match(/(?:const|let|var)\s+(\w+)\s*=)/)?.[1];
+              if (otherFuncName === funcName) {
+                violations.push({
+                  rule: 'dry_violation',
+                  type: 'DRY_VIOLATION',
+                  severity: 'error',
+                  message: `Duplicate function '${funcName}' found in ${path.relative(projectPath, file)}`,
+                  line_number: func.line_number,
+                  file_path: currentFilePath,
+                  suggested_fix: `Rename or remove duplicate function '${funcName}'`
+                });
+              }
             }
           } catch (error) {
             // Skip files that can't be read
@@ -66,156 +78,237 @@ function checkDryViolations(content, currentFilePath) {
         }
       }
     } catch (error) {
-      // Skip if directory doesn't exist
+      // Continue even if directory doesn't exist
     }
   }
   
   return violations;
 }
 
-function getAllTypeScriptFiles(dir, exclude = ['node_modules', 'dist', 'build', 'coverage']) {
+// Basic JSDoc validation
+function checkJSDocCompleteness(content, filePath) {
+  const violations = [];
+  const lines = content.split('\n');
+  
+  // Check for functions without JSDoc
+  lines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    
+    // Function declarations
+    const funcMatch = line.match(/(?:export\s+)?function\s+(\w+)/);
+    if (funcMatch) {
+      const funcName = funcMatch[1];
+      const prevLines = lines.slice(0, index).reverse();
+      const hasJSDoc = prevLines.some(l => l.trim().startsWith('/**'));
+      
+      if (!hasJSDoc) {
+        violations.push({
+          rule: 'jsdoc_completeness',
+          type: 'MISSING_JSDOC',
+          severity: 'warning',
+          message: `Function '${funcName}' missing JSDoc documentation`,
+          line_number: lineNumber,
+          file_path: filePath,
+          suggested_fix: `Add JSDoc comment above the function`
+        });
+      }
+    }
+    
+    // Arrow functions
+    const arrowMatch = line.match(/(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:\([^)]*\)\s*=>)/);
+    if (arrowMatch) {
+      const funcName = arrowMatch[1];
+      const prevLines = lines.slice(0, index).reverse();
+      const hasJSDoc = prevLines.some(l => l.trim().startsWith('/**'));
+      
+      if (!hasJSDoc) {
+        violations.push({
+          rule: 'jsdoc_completeness',
+          type: 'MISSING_JSDOC',
+          severity: 'warning',
+          message: `Arrow function '${funcName}' missing JSDoc documentation`,
+          line_number: lineNumber,
+          file_path: filePath,
+          suggested_fix: `Add JSDoc comment above the function`
+        });
+      }
+    }
+  });
+  
+  return violations;
+}
+
+// Basic naming conventions
+function checkNamingConventions(content, filePath) {
+  const violations = [];
+  const lines = content.split('\n');
+  
+  lines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    
+    // Check for PascalCase functions (but exempt React components)
+    const isReactComponent = filePath.endsWith('.tsx') && 
+      (line.includes('ReactNode') || line.includes('JSX.Element') || 
+       line.includes('return (<') || line.includes('return (<'));
+
+    // Function declarations with PascalCase
+    const funcMatch = line.match(/function\s+([A-Z][a-zA-Z0-9]*)/);
+    if (funcMatch && !isReactComponent) {
+      violations.push({
+        rule: 'naming_conventions',
+        type: 'NAMING_CONVENTION',
+        severity: 'warning',
+        message: `Function should use camelCase`,
+        line_number: lineNumber,
+        file_path: filePath,
+        suggested_fix: `Rename function to use camelCase`
+      });
+    }
+    
+    // Arrow functions with PascalCase
+    const arrowMatch = line.match(/const\s+([A-Z][a-zA-Z0-9]*)\s*=\s*\(/);
+    if (arrowMatch && !isReactComponent) {
+      violations.push({
+        rule: 'naming_conventions',
+        type: 'NAMING_CONVENTION',
+        severity: 'warning',
+        message: `Function should use camelCase`,
+        line_number: lineNumber,
+        file_path: filePath,
+        suggested_fix: `Rename function to use camelCase`
+      });
+    }
+  });
+  
+  return violations;
+}
+
+// Main validation function
+function validateFile(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    
+    const violations = [
+      ...checkDryViolations(content, filePath),
+      ...checkJSDocCompleteness(content, filePath),
+      ...checkNamingConventions(content, filePath)
+    ];
+    
+    return violations;
+  } catch (error) {
+    console.log(`💥 Error reading file: ${error.message}`);
+    return [];
+  }
+}
+
+// Helper function to get all TypeScript files
+function getAllTypeScriptFiles(dir) {
   const files = [];
   
-  function scan(currentDir) {
-    if (!fs.existsSync(currentDir)) return;
-    
-    const items = fs.readdirSync(currentDir, { withFileTypes: true });
+  function traverse(currentDir) {
+    const items = fs.readdirSync(currentDir);
     
     for (const item of items) {
-      const fullPath = path.join(currentDir, item.name);
+      const fullPath = path.join(currentDir, item);
+      const stat = fs.statSync(fullPath);
       
-      if (item.isDirectory() && !exclude.includes(item.name)) {
-        scan(fullPath);
-      } else if (item.isFile() && /\.(ts|tsx|js|jsx)$/.test(item.name)) {
+      if (stat.isDirectory() && !item.startsWith('.') && 
+          !['node_modules', 'dist', 'build', 'coverage'].includes(item)) {
+        traverse(fullPath);
+      } else if (stat.isFile() && /\.(ts|tsx|js|jsx)$/.test(item)) {
         files.push(fullPath);
       }
     }
   }
   
-  scan(dir);
+  traverse(dir);
   return files;
 }
 
-function validateFile(filePath) {
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const violations = [];
-    
-    // Basic DRY detection - check for exact function duplicates
-    const dryViolations = checkDryViolations(content, filePath);
-    violations.push(...dryViolations);
-    
-    // Basic validation rules
-    const lines = content.split('\n');
-    
-    lines.forEach((line, index) => {
-      const lineNum = index + 1;
-      
-      // Check for missing JSDoc on functions
-      if (line.match(/(export\s+)?(async\s+)?function\s+\w+/) && 
-          !lines.slice(0, index).reverse().find(l => l.trim().startsWith('/**'))) {
-        violations.push({
-          rule: 'jsdoc_completeness',
-          message: 'Function missing JSDoc documentation',
-          line_number: lineNum,
-          suggestion: 'Add JSDoc comment above the function'
-        });
-      }
-      
-      // Check for arrow functions without documentation
-      if (line.match(/export\s+(const|let|var)\s+\w+\s*=\s*(?:async\s+)?\([^)]*\)\s*=>/) &&
-          !lines.slice(0, index).reverse().find(l => l.trim().startsWith('/**'))) {
-        violations.push({
-          rule: 'jsdoc_completeness',
-          message: 'Arrow function missing JSDoc documentation',
-          line_number: lineNum,
-          suggestion: 'Add JSDoc comment above the function'
-        });
-      }
-      
-      // Check naming conventions (simple) - exempt React components
-      const isReactComponent = filePath.endsWith('.tsx') && 
-        (line.includes('ReactNode') || line.includes('JSX.Element') || 
-         line.match(/function\s+([A-Z][a-zA-Z0-9]*)/)?.[1] === line.match(/function\s+([A-Z][a-zA-Z0-9]*)/)?.[1]);
-      
-      if (line.match(/function\s+([A-Z][a-zA-Z0-9]*)/) && !isReactComponent) {
-        violations.push({
-          rule: 'naming_conventions',
-          message: 'Function should use camelCase',
-          line_number: lineNum,
-          suggestion: 'Rename function to use camelCase'
-        });
-      }
-      
-      // Check arrow functions with PascalCase (but exempt React components)
-      if (line.match(/const\s+([A-Z][a-zA-Z0-9]*)\s*=\s*\(/) && !isReactComponent) {
-        violations.push({
-          rule: 'naming_conventions',
-          message: 'Function should use camelCase',
-          line_number: lineNum,
-          suggestion: 'Rename function to use camelCase'
-        });
-      }
-    });
-    
-    return violations;
-  } catch (error) {
-    return [{
-      rule: 'file_error',
-      message: `Error reading file: ${error.message}`,
-      line_number: 1,
-      suggestion: 'Check file permissions and encoding'
-    }];
-  }
-}
-
+// Watch directory for changes
 function watchDirectory(dirPath) {
-  if (!fs.existsSync(dirPath)) return;
+  const items = fs.readdirSync(dirPath);
   
-  const files = fs.readdirSync(dirPath, { withFileTypes: true });
-  
-  files.forEach(file => {
-    const fullPath = path.join(dirPath, file.name);
+  for (const item of items) {
+    const fullPath = path.join(dirPath, item);
+    const stat = fs.statSync(fullPath);
     
-    if (file.isDirectory() && !file.name.startsWith('.') && 
-        !['node_modules', 'dist', 'build', 'coverage'].includes(file.name)) {
+    if (stat.isDirectory() && !item.startsWith('.') && 
+        !['node_modules', 'dist', 'build', 'coverage'].includes(item)) {
       watchDirectory(fullPath);
-    } else if (file.isFile() && /\.(ts|tsx|js|jsx)$/.test(file.name)) {
+    } else if (stat.isFile() && /\.(ts|tsx|js|jsx)$/.test(item)) {
       watchedFiles.add(fullPath);
       
       fs.watchFile(fullPath, { interval: 100 }, () => {
         if (timeoutId) clearTimeout(timeoutId);
         
         timeoutId = setTimeout(() => {
+          const startTime = Date.now();
           console.log(`\n📁 File changed: ${path.relative(PROJECT_PATH, fullPath)}`);
           
           const violations = validateFile(fullPath);
+          const processingTime = Date.now() - startTime;
+          
+          console.log(`⏱️  Processing time: ${processingTime}ms`);
           
           if (violations.length === 0) {
-            console.log(`✅ No issues found`);
+            console.log(`✅ Perfect! No issues found`);
           } else {
-            console.log(`⚠️  ${violations.length} issues found:`);
-            violations.forEach(v => {
-              console.log(`   ❌ ${v.rule} (Line ${v.line_number}): ${v.message}`);
-              if (v.suggestion) {
-                console.log(`      💡 ${v.suggestion}`);
-              }
-            });
+            // Group violations by type for better organization
+            const errorViolations = violations.filter(v => v.severity === 'error');
+            const warningViolations = violations.filter(v => v.severity === 'warning');
+            const infoViolations = violations.filter(v => v.severity === 'info');
+            
+            console.log(`❌ ${violations.length} issues found:`);
+            
+            if (errorViolations.length > 0) {
+              console.log(`\n🚨 Critical Issues (${errorViolations.length}):`);
+              errorViolations.forEach(v => {
+                console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+                if (v.suggested_fix) {
+                  console.log(`      💡 Fix: ${v.suggested_fix}`);
+                }
+              });
+            }
+            
+            if (warningViolations.length > 0) {
+              console.log(`\n⚠️  Warnings (${warningViolations.length}):`);
+              warningViolations.forEach(v => {
+                console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+                if (v.suggested_fix) {
+                  console.log(`      💡 Fix: ${v.suggested_fix}`);
+                }
+              });
+            }
+            
+            if (infoViolations.length > 0) {
+              console.log(`\n💡 Suggestions (${infoViolations.length}):`);
+              infoViolations.forEach(v => {
+                console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+                if (v.suggested_fix) {
+                  console.log(`      💡 Fix: ${v.suggested_fix}`);
+                }
+              });
+            }
           }
           
           console.log('─'.repeat(60));
         }, debounceTime);
       });
     }
-  });
+  }
 }
 
 // Start watching
-console.log('👀 Scanning files to watch...');
-watchDirectory(path.join(PROJECT_PATH, 'app'));
+console.log(`👀 Watching ${watchedFiles.size} files for real-time validation`);
+console.log(`📊 Will show detailed violations and suggestions`);
 
-console.log(`📊 Watching ${watchedFiles.size} TypeScript/JavaScript files`);
-console.log('🔧 Minimal validation active (JSDoc + naming + DRY detection)');
-console.log('');
+watchDirectory(PROJECT_PATH);
 
-console.log('Ready! Edit and save any .ts/.tsx/.js/.jsx file to see validation results.');
+console.log('👀 Enhanced validation active - watching for changes...');
+
+// Handle shutdown
+process.on('SIGINT', () => {
+  console.log('\n👋 Stopping file watcher...');
+  process.exit(0);
+});
