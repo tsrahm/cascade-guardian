@@ -50,14 +50,14 @@ export class AdvancedSemanticSearch {
      */
     async keywordSearch(options) {
         let sql = `
-      SELECT f.*, fts.rank as fts_rank, 
+      SELECT f.*, 
              CASE 
                WHEN f.name LIKE ? THEN 1.0
                WHEN f.name LIKE ? THEN 0.8
                ELSE 0.0
              END as name_score
       FROM functions f
-      JOIN functions_fts fts ON f.id = fts.rowid
+      JOIN functions_fts ON f.id = functions_fts.rowid
       WHERE functions_fts MATCH ?
     `;
         const params = [
@@ -87,7 +87,7 @@ export class AdvancedSemanticSearch {
             sql += ` AND (${tagConditions})`;
             params.push(...options.tags.map(tag => `%${tag}%`));
         }
-        sql += ` ORDER BY fts.rank, name_score DESC, f.name LIMIT ?`;
+        sql += ` ORDER BY name_score DESC, f.name LIMIT ?`;
         params.push(options.limit || 50); // Get more results for better combination
         const stmt = this.db.prepare(sql);
         const rows = stmt.all(...params);
