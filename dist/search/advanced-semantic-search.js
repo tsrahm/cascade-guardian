@@ -57,13 +57,16 @@ export class AdvancedSemanticSearch {
                ELSE 0.0
              END as name_score
       FROM functions f
-      JOIN functions_fts ON f.id = functions_fts.rowid
-      WHERE functions_fts MATCH ?
+      WHERE f.name LIKE ? OR f.what LIKE ? OR f.how LIKE ? OR f.why LIKE ? OR f.inline_comments LIKE ?
     `;
         const params = [
-            `${options.query}%`, // Prefix match
-            `_%${options.query}%`, // Contains match
-            options.query
+            `${options.query}%`, // Prefix match for name score
+            `_%${options.query}%`, // Contains match for name score
+            `%${options.query}%`, // Name LIKE
+            `%${options.query}%`, // What LIKE
+            `%${options.query}%`, // How LIKE
+            `%${options.query}%`, // Why LIKE
+            `%${options.query}%` // Inline comments LIKE
         ];
         // Apply filters
         if (options.domain) {

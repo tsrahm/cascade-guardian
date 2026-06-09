@@ -45,6 +45,29 @@ devin/cascade is exceptionally good at writing code — but it has no memory of 
 
 Cascade Guardian solves this by **validating every edit at write-time**, before it lands. A semantic index gives the validator full context about what already exists, and headless Claude applies judgment about whether the edit is a legitimate new capability or a quality violation.
 
+## Quick Start
+
+### 🚀 **Real-time Cascade Integration (Recommended)**
+```bash
+# 1. Build index for your project
+./dev-index.sh /path/to/your/project
+
+# 2. Start real-time validation during cascade sessions
+node cascade-hook-monitor.js start
+```
+
+### 📁 **File Save Validation (Alternative)**
+```bash
+# Build index and watch for file changes
+./watch-harmony-minimal.js
+```
+
+### 🔧 **Manual Validation**
+```bash
+# Validate specific files
+node pre-edit-hook.js /path/to/file.tsx validate-edit
+```
+
 ## Installation
 
 ### Prerequisites

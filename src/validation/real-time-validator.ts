@@ -20,11 +20,13 @@ interface ValidationResult {
 }
 
 interface CodeViolation {
+  rule?: string;
   type: 'DRY_VIOLATION' | 'MISSING_JSDOC' | 'PATTERN_INCONSISTENCY' | 'SEMANTIC_SIMILARITY' | 'NAMING_CONVENTION' | 'ARCHITECTURAL_VIOLATION';
   severity: 'error' | 'warning' | 'info';
   message: string;
   line_number?: number;
   column?: number;
+  file_path?: string;
   suggested_fix?: string;
   similar_functions?: string[];
 }
@@ -209,9 +211,9 @@ export class RealTimeValidator {
         regex: /(?:^|\s)(async\s+)?function\s+(\w+)\s*\([^)]*\)/gm,
         type: 'function'
       },
-      // Class methods
+      // Class methods (more restrictive - require explicit access modifier or class context)
       {
-        regex: /(?:public|private|protected)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)/g,
+        regex: /(?:public|private|protected)\s+(?:async\s+)?(\w+)\s*\([^)]*\)/g,
         type: 'method'
       }
     ];
@@ -267,19 +269,42 @@ export class RealTimeValidator {
    */
   private async checkDryViolations(functions: any[], config: any): Promise<CodeViolation[]> {
     const violations: CodeViolation[] = [];
+    
+    // Language keywords and common patterns that should not be flagged as duplicates
+    const excludedNames = new Set([
+      'if', 'for', 'while', 'switch', 'case', 'catch', 'finally', 'else', 'do', 'try', 
+      'throw', 'return', 'break', 'continue', 'async', 'await', 'yield', 'typeof', 'instanceof',
+      'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf',
+      'propertyIsEnumerable', 'toLocaleString', 'bind', 'call', 'apply', 'length', 'name'
+    ]);
 
     for (const func of functions) {
-      // Check for exact name matches
+      // Skip excluded names, very short names, and constructor functions
+      if (excludedNames.has(func.name) || 
+          func.name.length < 3 || 
+          func.name === 'constructor' ||
+          func.name.startsWith('_') ||  // Skip private/internal functions
+          func.type === 'method') {     // Skip class methods for now
+        continue;
+      }
+      
+      // Check for exact name matches in different files only
       const exactMatches = functions.filter(f => 
-        f.name === func.name && f !== func
+        f.name === func.name && 
+        f !== func && 
+        f.file_path !== func.file_path &&
+        !excludedNames.has(f.name) &&
+        f.type !== 'method'
       );
 
       if (exactMatches.length > 0) {
         violations.push({
+          rule: 'dry_violation',
           type: 'DRY_VIOLATION',
           severity: 'error',
-          message: `Function '${func.name}' already exists in ${exactMatches.map(f => f.file_path).join(', ')}`,
+          message: `Function '${func.name}' already exists in ${[...new Set(exactMatches.map(f => f.file_path))].join(', ')}`,
           line_number: func.line_number,
+          file_path: func.file_path,
           suggested_fix: `Rename or remove duplicate function '${func.name}'`,
           similar_functions: exactMatches.map(f => `${f.name} (${f.file_path}:${f.line_number})`)
         });
@@ -291,10 +316,12 @@ export class RealTimeValidator {
         
         if (similarFunctions.length > 0) {
           violations.push({
+            rule: 'semantic_similarity',
             type: 'SEMANTIC_SIMILARITY',
             severity: 'warning',
             message: `Function '${func.name}' is semantically similar to existing functions`,
             line_number: func.line_number,
+            file_path: func.file_path,
             suggested_fix: `Consider refactoring to use existing: ${similarFunctions.join(', ')}`,
             similar_functions: similarFunctions
           });
@@ -314,10 +341,12 @@ export class RealTimeValidator {
     for (const func of functions) {
       if (!func.jsdoc) {
         violations.push({
+          rule: 'jsdoc_completeness',
           type: 'MISSING_JSDOC',
           severity: 'error',
           message: `Function '${func.name}' missing JSDoc documentation`,
           line_number: func.line_number,
+          file_path: func.file_path,
           suggested_fix: `Add JSDoc with required tags: ${config.required_tags.join(', ')}`
         });
         continue;
@@ -327,20 +356,24 @@ export class RealTimeValidator {
       
       if (missingTags.length > 0) {
         violations.push({
+          rule: 'jsdoc_completeness',
           type: 'MISSING_JSDOC',
           severity: 'error',
           message: `Function '${func.name}' missing JSDoc tags: ${missingTags.join(', ')}`,
           line_number: func.line_number,
+          file_path: func.file_path,
           suggested_fix: `Add missing tags: @${missingTags.join(', @')}`
         });
       }
 
       if (func.jsdoc.tags && func.jsdoc.tags.split(',').length < config.min_tags) {
         violations.push({
+          rule: 'jsdoc_completeness',
           type: 'MISSING_JSDOC',
           severity: 'warning',
           message: `Function '${func.name}' has insufficient tags (${func.jsdoc.tags.split(',').length}/${config.min_tags} required)`,
           line_number: func.line_number,
+          file_path: func.file_path,
           suggested_fix: `Add more descriptive tags to reach minimum of ${config.min_tags}`
         });
       }
@@ -359,10 +392,12 @@ export class RealTimeValidator {
       // Check camelCase for regular functions
       if (config.enforce_camel_case && !this.isCamelCase(func.name)) {
         violations.push({
+          rule: 'naming_conventions',
           type: 'NAMING_CONVENTION',
           severity: 'warning',
           message: `Function '${func.name}' should use camelCase naming convention`,
           line_number: func.line_number,
+          file_path: func.file_path,
           suggested_fix: `Rename to '${this.toCamelCase(func.name)}'`
         });
       }
@@ -398,10 +433,12 @@ export class RealTimeValidator {
         for (const func of functions) {
           if (!this.followsPattern(func.name, namingPattern)) {
             violations.push({
+              rule: 'pattern_consistency',
               type: 'PATTERN_INCONSISTENCY',
               severity: 'warning',
               message: `Function '${func.name}' doesn't follow the naming pattern of this directory (${namingPattern})`,
               line_number: func.line_number,
+              file_path: func.file_path,
               suggested_fix: `Rename function to follow established pattern: ${namingPattern}`
             });
           }

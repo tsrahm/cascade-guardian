@@ -10,11 +10,13 @@ interface ValidationResult {
     processing_time: number;
 }
 interface CodeViolation {
+    rule?: string;
     type: 'DRY_VIOLATION' | 'MISSING_JSDOC' | 'PATTERN_INCONSISTENCY' | 'SEMANTIC_SIMILARITY' | 'NAMING_CONVENTION' | 'ARCHITECTURAL_VIOLATION';
     severity: 'error' | 'warning' | 'info';
     message: string;
     line_number?: number;
     column?: number;
+    file_path?: string;
     suggested_fix?: string;
     similar_functions?: string[];
 }

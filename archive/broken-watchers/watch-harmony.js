@@ -52,10 +52,10 @@ watcher.addHook({
   onViolation: (result) => {
     console.log(`\n🚨 Immediate Alert:`);
     console.log(`   Rule: ${result.violation.rule}`);
-    console.log(`   File: ${result.filePath}:${result.violation.line_number}`);
+    console.log(`   File: ${result.violation.file_path}:${result.violation.line_number}`);
     console.log(`   Issue: ${result.violation.message}`);
-    if (result.violation.suggestion) {
-      console.log(`   Fix: ${result.violation.suggestion}`);
+    if (result.violation.suggested_fix) {
+      console.log(`   Fix: ${result.violation.suggested_fix}`);
     }
   },
   
