@@ -1,0 +1,81 @@
+{
+  "name": "cascade-guardian",
+  "version": "1.0.0",
+  "description": "🚀 Advanced semantic code index + real-time validation for devin/cascade. Complete code intelligence system with performance optimizations.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE",
+    "LOCAL_DEVELOPMENT_GUIDE.md",
+    "DEVIN_INTEGRATION.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "build-index": "node dist/index.js build-index",
+    "search": "node dist/index.js search",
+    "validate": "node dist/index.js validate",
+    "test": "node --test dist/**/*.test.js",
+    "test:performance": "node test-performance-optimizations.js",
+    "test:integration": "node test-integration.js",
+    "test:all": "npm test && npm run test:performance && npm run test:integration",
+    "clean": "rm -rf dist",
+    "setup": "./setup.sh",
+    "lint": "echo 'Linting not configured yet'",
+    "type-check": "tsc --noEmit",
+    "health-check": "node health-check.js"
+  },
+  "keywords": [
+    "code-intelligence",
+    "semantic-search",
+    "code-analysis",
+    "validation",
+    "devin",
+    "cascade",
+    "typescript",
+    "javascript",
+    "code-quality",
+    "call-graph",
+    "embeddings",
+    "real-time",
+    "performance",
+    "indexing"
+  ],
+  "author": {
+    "name": "tsrahm",
+    "email": "tory.rahm@artifactuprising.com",
+    "url": "https://github.com/tsrahm/cascade-guardian"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsrahm/cascade-guardian.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tsrahm/cascade-guardian/issues"
+  },
+  "homepage": "https://github.com/tsrahm/cascade-guardian#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "better-sqlite3": "^11.0.0",
+    "ts-morph": "^27.0.2",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  },
+  "license": "MIT",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/tsrahm"
+  }
+}

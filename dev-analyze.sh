@@ -1,0 +1,12 @@
+#!/bin/bash
+PROJECT_PATH="${1:-.}"
+FUNCTION="${2:-test}"
+echo "Analyzing function '$FUNCTION' in: $PROJECT_PATH"
+echo "Callers:"
+node dist/index.js get-callers "$PROJECT_PATH" "$FUNCTION"
+echo ""
+echo "Dependencies:"
+node dist/index.js get-callees "$PROJECT_PATH" "$FUNCTION"
+echo ""
+echo "Impact:"
+node dist/index.js get-impact "$PROJECT_PATH" "$FUNCTION"

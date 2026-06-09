@@ -1,0 +1,726 @@
+/**
+ * Real-time validation hooks for immediate code quality feedback
+ * Provides instant validation as you write code
+ */
+
+import fs from 'fs';
+import path from 'path';
+import { resolveConfig } from '../config.js';
+import { openDatabase } from '../database/db.js';
+import { AdvancedSemanticSearch } from '../search/advanced-semantic-search.js';
+
+// ─── Validation Types ───────────────────────────────────────────────────────────
+
+interface ValidationResult {
+  allowed: boolean;
+  violations: CodeViolation[];
+  suggestions: string[];
+  confidence: number;
+  processing_time: number;
+}
+
+interface CodeViolation {
+  type: 'DRY_VIOLATION' | 'MISSING_JSDOC' | 'PATTERN_INCONSISTENCY' | 'SEMANTIC_SIMILARITY' | 'NAMING_CONVENTION' | 'ARCHITECTURAL_VIOLATION';
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  line_number?: number;
+  column?: number;
+  suggested_fix?: string;
+  similar_functions?: string[];
+}
+
+interface ValidationContext {
+  file_path: string;
+  content: string;
+  cursor_position?: number;
+  edit_type: 'create' | 'modify' | 'delete';
+  project_path: string;
+}
+
+interface ValidationRule {
+  name: string;
+  enabled: boolean;
+  severity: 'error' | 'warning' | 'info';
+  config: any;
+}
+
+// ─── Real-time Validator Implementation ───────────────────────────────────────────
+
+export class RealTimeValidator {
+  private db: any;
+  private search: AdvancedSemanticSearch;
+  private config: any;
+  private rules: Map<string, ValidationRule> = new Map();
+  private validationCache: Map<string, ValidationResult> = new Map();
+  private performanceStats = {
+    total_validations: 0,
+    total_violations: 0,
+    cache_hits: 0,
+    average_time: 0
+  };
+
+  constructor(projectPath: string) {
+    this.config = resolveConfig(projectPath);
+    this.db = openDatabase(this.config.databasePath);
+    this.search = new AdvancedSemanticSearch(this.config.databasePath);
+    
+    this.initializeRules();
+  }
+
+  /**
+   * Initialize validation rules with default configuration
+   */
+  private initializeRules(): void {
+    const defaultRules: ValidationRule[] = [
+      {
+        name: 'dry_violation',
+        enabled: true,
+        severity: 'error',
+        config: { similarity_threshold: 0.8, check_semantics: true }
+      },
+      {
+        name: 'jsdoc_completeness',
+        enabled: true,
+        severity: 'error',
+        config: { required_tags: this.config.jsdoc.requiredTags, min_tags: this.config.jsdoc.minTags }
+      },
+      {
+        name: 'naming_conventions',
+        enabled: true,
+        severity: 'warning',
+        config: { enforce_camel_case: true, enforce_pascal_case: true }
+      },
+      {
+        name: 'pattern_consistency',
+        enabled: true,
+        severity: 'warning',
+        config: { check_directory_patterns: true, check_architectural_patterns: true }
+      },
+      {
+        name: 'semantic_similarity',
+        enabled: true,
+        severity: 'info',
+        config: { threshold: 0.7, check_function_purpose: true }
+      },
+      {
+        name: 'architectural_alignment',
+        enabled: true,
+        severity: 'warning',
+        config: { check_layer_violations: true, check_domain_coherence: true }
+      }
+    ];
+
+    for (const rule of defaultRules) {
+      this.rules.set(rule.name, rule);
+    }
+  }
+
+  /**
+   * Validate code changes in real-time
+   */
+  async validateCode(context: ValidationContext): Promise<ValidationResult> {
+    const startTime = Date.now();
+    this.performanceStats.total_validations++;
+
+    // Check cache first
+    const cacheKey = this.generateCacheKey(context);
+    const cached = this.validationCache.get(cacheKey);
+    if (cached) {
+      this.performanceStats.cache_hits++;
+      return cached;
+    }
+
+    const violations: CodeViolation[] = [];
+    const suggestions: string[] = [];
+
+    try {
+      // Parse the code to extract functions
+      const functions = await this.extractFunctions(context.content, context.file_path);
+      
+      // Run enabled validation rules
+      for (const [ruleName, rule] of this.rules.entries()) {
+        if (!rule.enabled) continue;
+
+        const ruleViolations = await this.runValidationRule(rule, functions, context);
+        violations.push(...ruleViolations);
+      }
+
+      // Generate suggestions based on violations
+      suggestions.push(...this.generateSuggestions(violations, context));
+
+      // Calculate overall confidence
+      const confidence = this.calculateConfidence(violations, functions);
+
+      const result: ValidationResult = {
+        allowed: !violations.some(v => v.severity === 'error'),
+        violations,
+        suggestions,
+        confidence,
+        processing_time: Date.now() - startTime
+      };
+
+      // Cache result
+      this.validationCache.set(cacheKey, result);
+      
+      // Update performance stats
+      this.performanceStats.total_violations += violations.length;
+      this.updateAverageTime(result.processing_time);
+
+      return result;
+
+    } catch (error) {
+      console.error('Validation error:', error);
+      
+      return {
+        allowed: true, // Fail open on errors
+        violations: [{
+          type: 'SEMANTIC_SIMILARITY',
+          severity: 'info',
+          message: `Validation error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        suggestions: ['Please check the code and try again'],
+        confidence: 0.5,
+        processing_time: Date.now() - startTime
+      };
+    }
+  }
+
+  /**
+   * Extract functions from code content
+   */
+  private async extractFunctions(content: string, filePath: string): Promise<any[]> {
+    const functions: any[] = [];
+    const lines = content.split('\n');
+
+    // Enhanced regex patterns for different function types
+    const patterns = [
+      // Export function declarations
+      {
+        regex: /export\s+(async\s+)?function\s+(\w+)\s*\([^)]*\)/g,
+        type: 'export_function'
+      },
+      // Export arrow functions
+      {
+        regex: /export\s+(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>/g,
+        type: 'export_arrow'
+      },
+      // Regular function declarations
+      {
+        regex: /(?:^|\s)(async\s+)?function\s+(\w+)\s*\([^)]*\)/gm,
+        type: 'function'
+      },
+      // Class methods
+      {
+        regex: /(?:public|private|protected)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)/g,
+        type: 'method'
+      }
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.regex.exec(content)) !== null) {
+        const functionName = match[2] || match[1];
+        const position = match.index || 0;
+        const lineNumber = content.substring(0, position).split('\n').length;
+        
+        // Extract JSDoc comment
+        const jsDocInfo = this.extractJSDocInfo(lines, lineNumber - 1);
+        
+        functions.push({
+          name: functionName,
+          type: pattern.type,
+          line_number: lineNumber,
+          file_path: filePath,
+          jsdoc: jsDocInfo,
+          signature: this.extractFunctionSignature(lines, lineNumber)
+        });
+      }
+    }
+
+    return functions;
+  }
+
+  /**
+   * Run a specific validation rule
+   */
+  private async runValidationRule(rule: ValidationRule, functions: any[], context: ValidationContext): Promise<CodeViolation[]> {
+    switch (rule.name) {
+      case 'dry_violation':
+        return this.checkDryViolations(functions, rule.config);
+      case 'jsdoc_completeness':
+        return this.checkJSDocCompleteness(functions, rule.config);
+      case 'naming_conventions':
+        return this.checkNamingConventions(functions, rule.config);
+      case 'pattern_consistency':
+        return this.checkPatternConsistency(functions, context, rule.config);
+      case 'semantic_similarity':
+        return this.checkSemanticSimilarity(functions, rule.config);
+      case 'architectural_alignment':
+        return this.checkArchitecturalAlignment(functions, context, rule.config);
+      default:
+        return [];
+    }
+  }
+
+  /**
+   * Check for DRY violations
+   */
+  private async checkDryViolations(functions: any[], config: any): Promise<CodeViolation[]> {
+    const violations: CodeViolation[] = [];
+
+    for (const func of functions) {
+      // Check for exact name matches
+      const exactMatches = functions.filter(f => 
+        f.name === func.name && f !== func
+      );
+
+      if (exactMatches.length > 0) {
+        violations.push({
+          type: 'DRY_VIOLATION',
+          severity: 'error',
+          message: `Function '${func.name}' already exists in ${exactMatches.map(f => f.file_path).join(', ')}`,
+          line_number: func.line_number,
+          suggested_fix: `Rename or remove duplicate function '${func.name}'`,
+          similar_functions: exactMatches.map(f => `${f.name} (${f.file_path}:${f.line_number})`)
+        });
+      }
+
+      // Check for semantic similarity
+      if (config.check_semantics && func.jsdoc.what) {
+        const similarFunctions = await this.findSemanticallySimilar(func, config.similarity_threshold);
+        
+        if (similarFunctions.length > 0) {
+          violations.push({
+            type: 'SEMANTIC_SIMILARITY',
+            severity: 'warning',
+            message: `Function '${func.name}' is semantically similar to existing functions`,
+            line_number: func.line_number,
+            suggested_fix: `Consider refactoring to use existing: ${similarFunctions.join(', ')}`,
+            similar_functions: similarFunctions
+          });
+        }
+      }
+    }
+
+    return violations;
+  }
+
+  /**
+   * Check JSDoc completeness
+   */
+  private checkJSDocCompleteness(functions: any[], config: any): CodeViolation[] {
+    const violations: CodeViolation[] = [];
+
+    for (const func of functions) {
+      if (!func.jsdoc) {
+        violations.push({
+          type: 'MISSING_JSDOC',
+          severity: 'error',
+          message: `Function '${func.name}' missing JSDoc documentation`,
+          line_number: func.line_number,
+          suggested_fix: `Add JSDoc with required tags: ${config.required_tags.join(', ')}`
+        });
+        continue;
+      }
+
+      const missingTags = config.required_tags.filter((tag: string) => !func.jsdoc[tag]);
+      
+      if (missingTags.length > 0) {
+        violations.push({
+          type: 'MISSING_JSDOC',
+          severity: 'error',
+          message: `Function '${func.name}' missing JSDoc tags: ${missingTags.join(', ')}`,
+          line_number: func.line_number,
+          suggested_fix: `Add missing tags: @${missingTags.join(', @')}`
+        });
+      }
+
+      if (func.jsdoc.tags && func.jsdoc.tags.split(',').length < config.min_tags) {
+        violations.push({
+          type: 'MISSING_JSDOC',
+          severity: 'warning',
+          message: `Function '${func.name}' has insufficient tags (${func.jsdoc.tags.split(',').length}/${config.min_tags} required)`,
+          line_number: func.line_number,
+          suggested_fix: `Add more descriptive tags to reach minimum of ${config.min_tags}`
+        });
+      }
+    }
+
+    return violations;
+  }
+
+  /**
+   * Check naming conventions
+   */
+  private checkNamingConventions(functions: any[], config: any): CodeViolation[] {
+    const violations: CodeViolation[] = [];
+
+    for (const func of functions) {
+      // Check camelCase for regular functions
+      if (config.enforce_camel_case && !this.isCamelCase(func.name)) {
+        violations.push({
+          type: 'NAMING_CONVENTION',
+          severity: 'warning',
+          message: `Function '${func.name}' should use camelCase naming convention`,
+          line_number: func.line_number,
+          suggested_fix: `Rename to '${this.toCamelCase(func.name)}'`
+        });
+      }
+
+      // Check PascalCase for class methods (if applicable)
+      if (func.type === 'method' && config.enforce_pascal_case && !this.isCamelCase(func.name)) {
+        violations.push({
+          type: 'NAMING_CONVENTION',
+          severity: 'warning',
+          message: `Method '${func.name}' should use camelCase naming convention`,
+          line_number: func.line_number,
+          suggested_fix: `Rename to '${this.toCamelCase(func.name)}'`
+        });
+      }
+    }
+
+    return violations;
+  }
+
+  /**
+   * Check pattern consistency
+   */
+  private async checkPatternConsistency(functions: any[], context: ValidationContext, config: any): Promise<CodeViolation[]> {
+    const violations: CodeViolation[] = [];
+
+    if (config.check_directory_patterns) {
+      const dirPath = path.dirname(context.file_path);
+      const existingFunctions = await this.getFunctionsInDirectory(dirPath);
+      
+      if (existingFunctions.length > 0) {
+        const namingPattern = this.detectNamingPattern(existingFunctions.map(f => f.name));
+        
+        for (const func of functions) {
+          if (!this.followsPattern(func.name, namingPattern)) {
+            violations.push({
+              type: 'PATTERN_INCONSISTENCY',
+              severity: 'warning',
+              message: `Function '${func.name}' doesn't follow the naming pattern of this directory (${namingPattern})`,
+              line_number: func.line_number,
+              suggested_fix: `Rename function to follow established pattern: ${namingPattern}`
+            });
+          }
+        }
+      }
+    }
+
+    return violations;
+  }
+
+  /**
+   * Check semantic similarity
+   */
+  private async checkSemanticSimilarity(functions: any[], config: any): Promise<CodeViolation[]> {
+    const violations: CodeViolation[] = [];
+
+    for (const func of functions) {
+      if (!func.jsdoc.what) continue;
+
+      const similarFunctions = await this.findSemanticallySimilar(func, config.threshold);
+      
+      if (similarFunctions.length > 0) {
+        violations.push({
+          type: 'SEMANTIC_SIMILARITY',
+          severity: 'info',
+          message: `Function '${func.name}' has similar purpose to existing functions`,
+          line_number: func.line_number,
+          suggested_fix: `Consider if this function adds unique value or can be refactored`,
+          similar_functions: similarFunctions
+        });
+      }
+    }
+
+    return violations;
+  }
+
+  /**
+   * Check architectural alignment
+   */
+  private checkArchitecturalAlignment(functions: any[], context: ValidationContext, config: any): CodeViolation[] {
+    const violations: CodeViolation[] = [];
+
+    for (const func of functions) {
+      if (config.check_layer_violations && func.jsdoc.systemlayer) {
+        const expectedLayer = this.getExpectedLayer(context.file_path);
+        
+        if (expectedLayer && func.jsdoc.systemlayer !== expectedLayer) {
+          violations.push({
+            type: 'ARCHITECTURAL_VIOLATION',
+            severity: 'warning',
+            message: `Function '${func.name}' in ${func.jsdoc.systemlayer} layer but file suggests ${expectedLayer}`,
+            line_number: func.line_number,
+            suggested_fix: `Move function to appropriate layer or update systemlayer tag to ${expectedLayer}`
+          });
+        }
+      }
+
+      if (config.check_domain_coherence && func.jsdoc.domain) {
+        const fileDomain = this.getFileDomain(context.file_path);
+        
+        if (fileDomain && func.jsdoc.domain !== fileDomain) {
+          violations.push({
+            type: 'ARCHITECTURAL_VIOLATION',
+            severity: 'info',
+            message: `Function '${func.name}' domain '${func.jsdoc.domain}' doesn't match file domain '${fileDomain}'`,
+            line_number: func.line_number,
+            suggested_fix: `Consider if function belongs in this domain or update domain tag`
+          });
+        }
+      }
+    }
+
+    return violations;
+  }
+
+  // ─── Helper Methods ─────────────────────────────────────────────────────────────
+
+  private extractJSDocInfo(lines: string[], startLine: number): any {
+    const jsDocInfo: any = {};
+    let jsDocText = '';
+
+    // Look backwards for JSDoc comment
+    for (let i = startLine; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (line.startsWith('/**')) {
+        // Found start of JSDoc
+        for (let j = i; j < lines.length; j++) {
+          const docLine = lines[j].trim();
+          jsDocText += docLine + '\n';
+          if (docLine.endsWith('*/')) {
+            break;
+          }
+        }
+        break;
+      } else if (line.length > 0 && !line.startsWith('*')) {
+        break;
+      }
+    }
+
+    if (jsDocText) {
+      // Extract tags
+      const tagPatterns = {
+        what: /@what\s+([^\n]+)/i,
+        how: /@how\s+([^\n]+)/i,
+        why: /@why\s+([^\n]+)/i,
+        params: /@param\s+\{[^}]+\}\s+(\w+)\s+([^\n]+)/gi,
+        returns: /@returns\s+\{[^}]+\}\s+([^\n]+)/i,
+        sideeffects: /@sideeffects\s+([^\n]+)/i,
+        systemlayer: /@systemlayer\s+([^\n]+)/i,
+        domain: /@domain\s+([^\n]+)/i,
+        tags: /@tags\s+([^\n]+)/i
+      };
+
+      for (const [tag, pattern] of Object.entries(tagPatterns)) {
+        if (tag === 'params') {
+          const params: string[] = [];
+          let match;
+          while ((match = pattern.exec(jsDocText)) !== null) {
+            params.push(`${match[1]}: ${match[2]}`);
+          }
+          jsDocInfo[tag] = params.join(', ');
+        } else {
+          const match = jsDocText.match(pattern);
+          if (match) {
+            jsDocInfo[tag] = match[1].trim();
+          }
+        }
+      }
+    }
+
+    return jsDocInfo;
+  }
+
+  private extractFunctionSignature(lines: string[], lineNumber: number): string {
+    for (let i = lineNumber - 1; i < Math.min(lineNumber + 5, lines.length); i++) {
+      const line = lines[i].trim();
+      if (line.includes('function') || line.includes('=>')) {
+        return line.split('{')[0].trim();
+      }
+    }
+    return '';
+  }
+
+  private async findSemanticallySimilar(func: any, threshold: number): Promise<string[]> {
+    if (!func.jsdoc.what) return [];
+
+    const searchQuery = `${func.name} ${func.jsdoc.what}`;
+    const results = await this.search.search({
+      query: searchQuery,
+      limit: 5
+    });
+
+    return results
+      .filter(r => r.score > threshold && r.name !== func.name)
+      .map(r => r.name);
+  }
+
+  private isCamelCase(str: string): boolean {
+    return /^[a-z][a-zA-Z0-9]*$/.test(str);
+  }
+
+  private toCamelCase(str: string): string {
+    return str.charAt(0).toLowerCase() + str.slice(1);
+  }
+
+  private detectNamingPattern(names: string[]): string {
+    // Simple pattern detection
+    const hasCamelCase = names.some(name => /^[a-z][a-zA-Z0-9]*$/.test(name));
+    const hasSnakeCase = names.some(name => /^[a-z][a-z0-9_]*$/.test(name));
+    
+    if (hasCamelCase) return 'camelCase';
+    if (hasSnakeCase) return 'snake_case';
+    return 'mixed';
+  }
+
+  private followsPattern(name: string, pattern: string): boolean {
+    switch (pattern) {
+      case 'camelCase':
+        return this.isCamelCase(name);
+      case 'snake_case':
+        return /^[a-z][a-z0-9_]*$/.test(name);
+      default:
+        return true;
+    }
+  }
+
+  private async getFunctionsInDirectory(dirPath: string): Promise<any[]> {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT name FROM functions 
+      WHERE file_path LIKE ?
+    `);
+    
+    const results = stmt.all(`${dirPath}%`);
+    return results.map((r: any) => ({ name: r.name }));
+  }
+
+  private getExpectedLayer(filePath: string): string | null {
+    // Simple layer detection based on file path
+    if (filePath.includes('/models/')) return 'Model';
+    if (filePath.includes('/services/')) return 'Business Logic';
+    if (filePath.includes('/utils/')) return 'Utility';
+    if (filePath.includes('/controllers/')) return 'Controller';
+    return null;
+  }
+
+  private getFileDomain(filePath: string): string | null {
+    // Simple domain detection based on file path
+    if (filePath.includes('/auth/')) return 'authentication';
+    if (filePath.includes('/user/')) return 'user-management';
+    if (filePath.includes('/payment/')) return 'payment';
+    return null;
+  }
+
+  private generateCacheKey(context: ValidationContext): string {
+    return `${context.file_path}:${context.content.length}:${context.edit_type}`;
+  }
+
+  private calculateConfidence(violations: CodeViolation[], functions: any[]): number {
+    if (functions.length === 0) return 0.5;
+
+    const errorCount = violations.filter(v => v.severity === 'error').length;
+    const warningCount = violations.filter(v => v.severity === 'warning').length;
+    
+    const baseConfidence = 1.0 - (errorCount / functions.length);
+    const adjustedConfidence = baseConfidence - (warningCount / functions.length * 0.5);
+    
+    return Math.max(0, Math.min(1, adjustedConfidence));
+  }
+
+  private generateSuggestions(violations: CodeViolation[], context: ValidationContext): string[] {
+    const suggestions: string[] = [];
+
+    // Group violations by type
+    const grouped = violations.reduce((acc, violation) => {
+      if (!acc[violation.type]) acc[violation.type] = [];
+      acc[violation.type].push(violation);
+      return acc;
+    }, {} as Record<string, CodeViolation[]>);
+
+    // Generate contextual suggestions
+    if (grouped.DRY_VIOLATION) {
+      suggestions.push('Consider refactoring to eliminate duplicate code');
+    }
+
+    if (grouped.MISSING_JSDOC) {
+      suggestions.push('Add comprehensive JSDoc documentation for better code understanding');
+    }
+
+    if (grouped.NAMING_CONVENTION) {
+      suggestions.push('Follow consistent naming conventions across the codebase');
+    }
+
+    if (grouped.ARCHITECTURAL_VIOLATION) {
+      suggestions.push('Ensure functions are placed in appropriate architectural layers');
+    }
+
+    return suggestions;
+  }
+
+  private updateAverageTime(newTime: number): void {
+    const totalTime = this.performanceStats.average_time * (this.performanceStats.total_validations - 1) + newTime;
+    this.performanceStats.average_time = totalTime / this.performanceStats.total_validations;
+  }
+
+  // ─── Public API Methods ───────────────────────────────────────────────────────
+
+  /**
+   * Enable or disable a validation rule
+   */
+  setRuleEnabled(ruleName: string, enabled: boolean): void {
+    const rule = this.rules.get(ruleName);
+    if (rule) {
+      rule.enabled = enabled;
+    }
+  }
+
+  /**
+   * Configure a validation rule
+   */
+  configureRule(ruleName: string, config: any): void {
+    const rule = this.rules.get(ruleName);
+    if (rule) {
+      rule.config = { ...rule.config, ...config };
+    }
+  }
+
+  /**
+   * Get validation statistics
+   */
+  getStats(): any {
+    return {
+      ...this.performanceStats,
+      rules_enabled: Array.from(this.rules.values()).filter(r => r.enabled).length,
+      rules_total: this.rules.size,
+      cache_size: this.validationCache.size
+    };
+  }
+
+  /**
+   * Clear validation cache
+   */
+  clearCache(): void {
+    this.validationCache.clear();
+  }
+
+  /**
+   * Validate a file change
+   */
+  async validateFileChange(filePath: string, content: string, editType: 'create' | 'modify' | 'delete'): Promise<ValidationResult> {
+    return this.validateCode({
+      file_path: filePath,
+      content,
+      edit_type: editType,
+      project_path: this.config.projectRoot
+    });
+  }
+
+  close(): void {
+    this.search.close();
+    this.db.close();
+  }
+}
