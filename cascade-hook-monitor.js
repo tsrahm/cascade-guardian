@@ -126,6 +126,7 @@ class CascadeHookMonitor {
    */
   validateFileChange(filePath, oldContent, modificationTime) {
     this.validationCount++;
+    const startTime = Date.now();
     
     try {
       const newContent = fs.readFileSync(filePath, 'utf-8');
@@ -154,36 +155,76 @@ class CascadeHookMonitor {
         return true;
       });
 
-      // Check for error severity violations
-      const errorViolations = violations.filter(v => v.rule === 'dry_violation');
-      const advisoryViolations = violations.filter(v => v.rule !== 'dry_violation');
+      // Group violations by severity for better organization
+      const errorViolations = violations.filter(v => v.severity === 'error');
+      const warningViolations = violations.filter(v => v.severity === 'warning');
+      const infoViolations = violations.filter(v => v.severity === 'info');
       
       // Create result object
       const result = {
-        allowed: errorViolations.length === 0, // Block on DRY violations
+        allowed: errorViolations.length === 0, // Block on error severity violations
         reason: errorViolations.length > 0 ? `Edit BLOCKED: ${errorViolations.length} critical violations` : violations.length > 0 ? `Edit allowed with ${violations.length} suggestions` : 'Edit approved - no issues detected',
         suggestions: violations.map(v => `${v.message} (Line ${v.line_number}): ${v.suggestion}`),
         violations: violations
       };
       
+      const processingTime = Date.now() - startTime;
+      console.log(`⏱️  Processing time: ${processingTime}ms`);
+      
       if (!result.allowed) {
         console.log(`❌ Edit BLOCKED: ${result.reason}`);
-        errorViolations.forEach(v => {
-          console.log(`   - ${v.rule} (Line ${v.line_number}): ${v.message}`);
-        });
-        if (advisoryViolations.length > 0) {
-          console.log(`💡 ${advisoryViolations.length} additional suggestions:`);
-          advisoryViolations.forEach(v => {
-            console.log(`   - ${v.message} (Line ${v.line_number}): ${v.suggestion}`);
+        
+        if (errorViolations.length > 0) {
+          console.log(`\n🚨 Critical Issues (${errorViolations.length}):`);
+          errorViolations.forEach(v => {
+            console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+            if (v.suggestion) {
+              console.log(`      💡 Fix: ${v.suggestion}`);
+            }
+          });
+        }
+        
+        if (warningViolations.length > 0) {
+          console.log(`\n⚠️  Additional Warnings (${warningViolations.length}):`);
+          warningViolations.forEach(v => {
+            console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+            if (v.suggestion) {
+              console.log(`      💡 Fix: ${v.suggestion}`);
+            }
+          });
+        }
+        
+        if (infoViolations.length > 0) {
+          console.log(`\n💡 Suggestions (${infoViolations.length}):`);
+          infoViolations.forEach(v => {
+            console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+            if (v.suggestion) {
+              console.log(`      💡 Fix: ${v.suggestion}`);
+            }
           });
         }
       } else {
         console.log(`✅ Edit Approved`);
         
-        if (result.suggestions && result.suggestions.length > 0) {
-          console.log(`💡 ${result.suggestions.length} suggestions for improvement:`);
-          result.suggestions.forEach(s => console.log(`   - ${s}`));
-        } else {
+        if (warningViolations.length > 0) {
+          console.log(`\n⚠️  Warnings (${warningViolations.length}):`);
+          warningViolations.forEach(v => {
+            console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+            if (v.suggestion) {
+              console.log(`      💡 Fix: ${v.suggestion}`);
+            }
+          });
+        }
+        
+        if (infoViolations.length > 0) {
+          console.log(`\n💡 Suggestions (${infoViolations.length}):`);
+          infoViolations.forEach(v => {
+            console.log(`   ${v.rule} (Line ${v.line_number}): ${v.message}`);
+            if (v.suggestion) {
+              console.log(`      💡 Fix: ${v.suggestion}`);
+            }
+          });
+        } else if (warningViolations.length === 0 && infoViolations.length === 0) {
           console.log(`🎉 Perfect! No issues detected`);
         }
       }

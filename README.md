@@ -59,7 +59,7 @@ node cascade-hook-monitor.js start
 ### 📁 **File Save Validation (Alternative)**
 ```bash
 # Build index and watch for file changes
-./watch-harmony-minimal.js
+./harmony-validator.js
 ```
 
 ### 🔧 **Manual Validation**

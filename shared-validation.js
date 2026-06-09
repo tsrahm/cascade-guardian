@@ -35,6 +35,7 @@ export function checkDryViolations(content, currentFilePath) {
             if (fileContent.includes(funcBody) && funcBody.length > 20) {
               violations.push({
                 rule: 'dry_violation',
+                severity: 'error',
                 message: `Duplicate function '${funcName}' found in ${path.relative(projectPath, file)}`,
                 line_number: content.split('\n').findIndex(line => line.includes(funcName)) + 1,
                 suggestion: 'Extract to shared utility or remove duplicate'
@@ -95,6 +96,7 @@ export function validateFileContent(filePath, content) {
         !lines.slice(0, index).reverse().find(l => l.trim().startsWith('/**'))) {
       violations.push({
         rule: 'jsdoc_completeness',
+        severity: 'warning',
         message: 'Function missing JSDoc documentation',
         line_number: lineNum,
         suggestion: 'Add JSDoc comment above the function'
@@ -106,6 +108,7 @@ export function validateFileContent(filePath, content) {
         !lines.slice(0, index).reverse().find(l => l.trim().startsWith('/**'))) {
       violations.push({
         rule: 'jsdoc_completeness',
+        severity: 'warning',
         message: 'Arrow function missing JSDoc documentation',
         line_number: lineNum,
         suggestion: 'Add JSDoc comment above the function'
@@ -132,6 +135,7 @@ export function validateFileContent(filePath, content) {
     if (funcMatch && !isReactComponent) {
       violations.push({
         rule: 'naming_conventions',
+        severity: 'warning',
         message: 'Function should use camelCase',
         line_number: lineNum,
         suggestion: 'Rename function to use camelCase'
@@ -143,6 +147,7 @@ export function validateFileContent(filePath, content) {
     if (arrowMatch && !isReactComponent) {
       violations.push({
         rule: 'naming_conventions',
+        severity: 'warning',
         message: 'Function should use camelCase',
         line_number: lineNum,
         suggestion: 'Rename function to use camelCase'

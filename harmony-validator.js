@@ -56,7 +56,7 @@ function checkDryViolations(content, currentFilePath) {
             const otherArrowFunctions = otherContent.match(/(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:\([^)]*\)\s*=>[^{]*\{[\s\S]*?^}|[^=]*=>)/gm) || [];
             
             for (const otherFunc of [...otherFunctions, ...otherArrowFunctions]) {
-              const otherFuncName = otherFunc.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || otherFunc.match(/(?:const|let|var)\s+(\w+)\s*=)/)?.[1];
+              const otherFuncName = otherFunc.match(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=)/)?.[1] || otherFunc.match(/(?:const|let|var)\s+(\w+)\s*=/)?.[1];
               if (otherFuncName === funcName) {
                 violations.push({
                   rule: 'dry_violation',
